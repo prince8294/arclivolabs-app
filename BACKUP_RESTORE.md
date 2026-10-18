@@ -1,6 +1,17 @@
 # Backup, Data Safety & Disaster Recovery Guide
 
-Arclivo Labs AI Business Manager uses an atomic JSON database stored in `arclivo-backend/data/db.json`, with the previous snapshot at `db.json.bak`. Writes use a temporary file and atomic rename to reduce corruption risk.
+Arclivo Labs AI Business Manager uses MongoDB Atlas in production. Local development and tests retain the atomic JSON database in `arclivo-backend/data/db.json`. Runtime JSON files and private migration backups are ignored by Git.
+
+Before the first production cutover, run the JSON-to-MongoDB migration in dry-run mode, commit only into an empty target collection, and verify counts:
+
+```bash
+cd arclivo-backend
+npm run migrate:mongodb
+npm run migrate:mongodb -- --commit
+npm run verify:mongodb
+```
+
+The commit step preserves the source and creates an ignored local backup. It refuses to overwrite or merge an existing MongoDB state document. Atlas backups/snapshots should be configured before production use.
 
 ---
 
