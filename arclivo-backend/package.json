@@ -1,0 +1,30 @@
+{
+  "name": "arclivo-email-backend",
+  "version": "1.0.0",
+  "description": "Arclivo Labs AI Email Automation Backend",
+  "main": "dist/server.js",
+  "scripts": {
+    "clean": "node scripts/clean-dist.js",
+    "build": "npm run clean && tsc",
+    "start": "node dist/server.js",
+    "dev": "node -r ts-node/register src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/run-tests.js tests/phase4-tests.js tests/phase5-integration-tests.js",
+    "setup:owner-auth": "node scripts/setup-owner-auth.js",
+    "generate:password-hash": "node scripts/hash-password.js",
+    "generate:encryption-key": "node scripts/generate-encryption-key.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-async-errors": "^3.1.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.13",
+    "@types/express": "^4.17.17",
+    "@types/node": "^20.5.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.6"
+  }
+}
