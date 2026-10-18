@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'arclivo-serverless-tests-'));
 const password = 'serverless-test-owner-password';
@@ -56,4 +57,23 @@ test('cron endpoint rejects requests without the configured bearer secret', asyn
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('Vercel runtime defaults to MongoDB and fails closed before JSON initialization', () => {
+  const configPath = path.resolve(__dirname, '../dist/config.js');
+  const script = `require(${JSON.stringify(configPath)})`;
+  const child = spawnSync(process.execPath, ['-e', script], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      VERCEL: '1',
+      PERSISTENCE_DRIVER: '',
+      MONGODB_URI: '',
+      CRON_SECRET: '',
+    },
+  });
+  assert.notEqual(child.status, 0);
+  assert.match(child.stderr, /MONGODB_URI/);
+  assert.doesNotMatch(child.stderr, /mkdir|db\.json|initJson/);
 });

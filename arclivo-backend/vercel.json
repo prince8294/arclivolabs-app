@@ -1,12 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
-  "functions": {
-    "api/index.js": { "maxDuration": 60 }
-  },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api" }
-  ],
   "crons": [
     { "path": "/api/internal/cron/process-email", "schedule": "0 3 * * *" }
   ]

@@ -5,3 +5,5 @@ data/*.bak
 data/*.json
 private-backups/
 npm-debug.log*
+
+.vercel

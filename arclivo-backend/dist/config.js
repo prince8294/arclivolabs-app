@@ -9,6 +9,7 @@ function positiveInteger(value, fallback) {
 }
 exports.config = {
     nodeEnv: process.env.NODE_ENV || 'development',
+    isVercel: process.env.VERCEL === '1',
     port: positiveInteger(process.env.PORT, 5000),
     sessionSigningKey: process.env.SESSION_SIGNING_KEY || '',
     ownerPasswordHash: process.env.OWNER_PASSWORD_HASH || '',
@@ -21,7 +22,8 @@ exports.config = {
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     googleRedirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback',
     dataDir: process.env.ARCLIVO_DATA_DIR || '',
-    persistenceDriver: process.env.PERSISTENCE_DRIVER || (process.env.NODE_ENV === 'production' ? 'mongodb' : 'json'),
+    persistenceDriver: process.env.PERSISTENCE_DRIVER ||
+        (process.env.NODE_ENV === 'production' || process.env.VERCEL === '1' ? 'mongodb' : 'json'),
     mongodbUri: process.env.MONGODB_URI || '',
     mongodbDbName: process.env.MONGODB_DB_NAME || 'arclivo',
     mongodbStateCollection: process.env.MONGODB_STATE_COLLECTION || 'app_state',
@@ -32,7 +34,7 @@ exports.config = {
     gmailTimeoutMs: positiveInteger(process.env.GMAIL_TIMEOUT_MS, 20_000),
 };
 function assertSafeStartup() {
-    if (exports.config.nodeEnv !== 'production')
+    if (exports.config.nodeEnv !== 'production' && !exports.config.isVercel)
         return;
     const missing = [];
     if (exports.config.sessionSigningKey.length < 32)
@@ -51,3 +53,4 @@ function assertSafeStartup() {
         throw new Error(`Unsafe production configuration. Missing: ${missing.join(', ')}`);
     }
 }
+assertSafeStartup();

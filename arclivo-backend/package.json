@@ -13,6 +13,7 @@
     "setup:owner-auth": "node scripts/setup-owner-auth.js",
     "migrate:mongodb": "node scripts/migrate-json-to-mongodb.js",
     "verify:mongodb": "node scripts/migrate-json-to-mongodb.js --verify",
+    "diagnose:production-env": "node scripts/diagnose-production-env.js",
     "generate:password-hash": "node scripts/hash-password.js",
     "generate:encryption-key": "node scripts/generate-encryption-key.js"
   },

@@ -7,6 +7,7 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 
 export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
+  isVercel: process.env.VERCEL === '1',
   port: positiveInteger(process.env.PORT, 5000),
   sessionSigningKey: process.env.SESSION_SIGNING_KEY || '',
   ownerPasswordHash: process.env.OWNER_PASSWORD_HASH || '',
@@ -20,7 +21,9 @@ export const config = {
   googleRedirectUri:
     process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback',
   dataDir: process.env.ARCLIVO_DATA_DIR || '',
-  persistenceDriver: process.env.PERSISTENCE_DRIVER || (process.env.NODE_ENV === 'production' ? 'mongodb' : 'json'),
+  persistenceDriver:
+    process.env.PERSISTENCE_DRIVER ||
+    (process.env.NODE_ENV === 'production' || process.env.VERCEL === '1' ? 'mongodb' : 'json'),
   mongodbUri: process.env.MONGODB_URI || '',
   mongodbDbName: process.env.MONGODB_DB_NAME || 'arclivo',
   mongodbStateCollection: process.env.MONGODB_STATE_COLLECTION || 'app_state',
@@ -32,7 +35,7 @@ export const config = {
 };
 
 export function assertSafeStartup(): void {
-  if (config.nodeEnv !== 'production') return;
+  if (config.nodeEnv !== 'production' && !config.isVercel) return;
 
   const missing: string[] = [];
   if (config.sessionSigningKey.length < 32) missing.push('SESSION_SIGNING_KEY (minimum 32 characters)');
@@ -46,3 +49,5 @@ export function assertSafeStartup(): void {
     throw new Error(`Unsafe production configuration. Missing: ${missing.join(', ')}`);
   }
 }
+
+assertSafeStartup();
