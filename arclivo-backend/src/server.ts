@@ -9,6 +9,7 @@ import phase3Router from './routes/phase3';
 import phase4Router from './routes/phase4';
 import { SchedulerService } from './services/schedulerService';
 import { logger } from './utils/logger';
+import { store } from './models/store';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -37,12 +38,21 @@ app.use((req, res, next) => {
   next();
 });
 
-const health = (_req: express.Request, res: express.Response) => res.json({
-  service: 'Arclivo Labs AI Email Automation API',
-  status: 'online',
-  version: '1.1.0',
-  timestamp: new Date().toISOString(),
-});
+const health = async (_req: express.Request, res: express.Response) => {
+  try {
+    const persistence = await store.healthCheck();
+    res.json({
+      service: 'Arclivo Labs AI Email Automation API',
+      status: 'online',
+      version: '1.1.0',
+      persistence: persistence.persistence,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.error('health_check_failed', { message: error instanceof Error ? error.message : 'unknown' });
+    res.status(503).json({ status: 'unavailable' });
+  }
+};
 app.get('/', health);
 app.get('/healthz', health);
 app.use('/api', apiRouter);

@@ -21,13 +21,7 @@ type TestTransport = (
   internalMessageId: string
 ) => Promise<SendEmailResult>;
 
-interface OAuthFlow {
-  verifier: string;
-  expiresAt: number;
-}
-
 export class GmailService {
-  private static oauthFlows = new Map<string, OAuthFlow>();
   private static testTransport?: TestTransport;
 
   static setTestTransport(transport?: TestTransport): void {
@@ -35,17 +29,14 @@ export class GmailService {
     this.testTransport = transport;
   }
 
-  static createAuthUrl(): string {
+  static async createAuthUrl(): Promise<string> {
     if (!config.googleClientId || !config.googleClientSecret) {
       throw new Error('Google OAuth is not configured.');
     }
     const state = crypto.randomBytes(32).toString('base64url');
     const verifier = crypto.randomBytes(48).toString('base64url');
     const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-    this.oauthFlows.set(state, { verifier, expiresAt: Date.now() + 10 * 60_000 });
-    for (const [key, flow] of this.oauthFlows) {
-      if (flow.expiresAt <= Date.now()) this.oauthFlows.delete(key);
-    }
+    await store.saveOAuthFlow(state, verifier, Date.now() + 10 * 60_000);
 
     const scopes = [
       'https://www.googleapis.com/auth/gmail.send',
@@ -70,8 +61,7 @@ export class GmailService {
     code: string,
     state: string
   ): Promise<{ success: boolean; userEmail?: string; error?: string }> {
-    const flow = this.oauthFlows.get(state);
-    this.oauthFlows.delete(state);
+    const flow = await store.consumeOAuthFlow(state);
     if (!flow || flow.expiresAt <= Date.now()) return { success: false, error: 'Invalid or expired OAuth state.' };
 
     try {

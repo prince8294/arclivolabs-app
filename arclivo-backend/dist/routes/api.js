@@ -1,5 +1,9 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+const crypto_1 = __importDefault(require("crypto"));
 const express_1 = require("express");
 const config_1 = require("../config");
 const security_1 = require("../middleware/security");
@@ -53,6 +57,21 @@ router.get('/auth/google/callback', async (req, res) => {
         return;
     }
     res.send(`<h2>Gmail connected successfully</h2><p>${escape(result.userEmail || '')}</p><p>You can return to the Arclivo app.</p>`);
+});
+router.get('/internal/cron/process-email', async (req, res) => {
+    const provided = req.header('authorization') || '';
+    const expected = config_1.config.cronSecret ? `Bearer ${config_1.config.cronSecret}` : '';
+    const providedBytes = Buffer.from(provided);
+    const expectedBytes = Buffer.from(expected);
+    const authorized = expectedBytes.length > 0 &&
+        providedBytes.length === expectedBytes.length &&
+        crypto_1.default.timingSafeEqual(providedBytes, expectedBytes);
+    if (!authorized) {
+        res.status(401).json({ error: 'Unauthorized scheduled invocation.' });
+        return;
+    }
+    await schedulerService_1.SchedulerService.processQueue();
+    res.json({ success: true });
 });
 router.use(security_1.requireOwner);
 router.post('/auth/logout', async (_req, res) => {
@@ -217,9 +236,9 @@ router.post('/settings/test-gmail', sendLimiter, async (_req, res) => {
     const result = await gmailService_1.GmailService.testConnection();
     res.json({ ...result, message: result.connected ? `Connected to ${result.userEmail}` : result.error });
 });
-router.get('/auth/google/url', sendLimiter, (_req, res) => {
+router.get('/auth/google/url', sendLimiter, async (_req, res) => {
     try {
-        res.json({ url: gmailService_1.GmailService.createAuthUrl() });
+        res.json({ url: await gmailService_1.GmailService.createAuthUrl() });
     }
     catch (error) {
         safeError(res, error, 503);

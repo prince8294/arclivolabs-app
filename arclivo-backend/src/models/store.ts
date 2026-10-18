@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { MongoStateAdapter } from './mongoStateAdapter';
 import {
   IAuditLog,
   IEmailLog,
@@ -59,11 +60,17 @@ interface StoredOAuth {
   userEmail?: string;
 }
 
+interface StoredOAuthFlow {
+  verifier: EncryptedSecret;
+  expiresAt: number;
+}
+
 interface DatabaseSchema {
   schemaVersion: number;
   leads: ILead[];
   settings: ISettings;
   oauth: StoredOAuth;
+  oauthFlows: Record<string, StoredOAuthFlow>;
   secrets: { aiApiKey?: EncryptedSecret };
   logs: IEmailLog[];
   emailRecords: IEmailRecord[];
@@ -137,6 +144,7 @@ const defaultData = (): DatabaseSchema => ({
   leads: [],
   settings: defaultSettings(),
   oauth: {},
+  oauthFlows: {},
   secrets: {},
   logs: [],
   emailRecords: [],
@@ -170,9 +178,20 @@ function clone<T>(value: T): T {
 class Store {
   private data: DatabaseSchema = defaultData();
   private mutationQueue: Promise<void> = Promise.resolve();
+  private readonly mongoAdapter = config.persistenceDriver === 'mongodb'
+    ? new MongoStateAdapter<DatabaseSchema>()
+    : undefined;
+  private mongoRevision = 0;
+  private readonly ready: Promise<void>;
 
   constructor() {
-    this.init();
+    if (!['json', 'mongodb'].includes(config.persistenceDriver)) {
+      throw new Error('PERSISTENCE_DRIVER must be either json or mongodb.');
+    }
+    this.ready = this.mongoAdapter ? this.initMongo() : Promise.resolve(this.initJson());
+    void this.ready.catch(error => {
+      logger.error('store_initialization_failed', { message: error instanceof Error ? error.message : 'unknown' });
+    });
   }
 
   private encryptionKey(): Buffer {
@@ -241,6 +260,7 @@ class Store {
           }))
         : [],
       oauth: raw?.oauth || {},
+      oauthFlows: raw?.oauthFlows && typeof raw.oauthFlows === 'object' ? raw.oauthFlows : {},
       secrets: raw?.secrets || {},
       logs: Array.isArray(raw?.logs) ? raw.logs : [],
       emailRecords: Array.isArray(raw?.emailRecords) ? raw.emailRecords : [],
@@ -286,7 +306,7 @@ class Store {
     return result;
   }
 
-  private init(): void {
+  private initJson(): void {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     let source = DATA_FILE;
     try {
@@ -305,6 +325,16 @@ class Store {
     }
   }
 
+  private async initMongo(): Promise<void> {
+    const state = await this.mongoAdapter!.initialize(defaultData());
+    const migrated = this.migrate(state.data);
+    this.data = migrated;
+    this.mongoRevision = state.revision;
+    if (JSON.stringify(migrated) !== JSON.stringify(state.data)) {
+      this.mongoRevision = await this.mongoAdapter!.save(clone(migrated), this.mongoRevision);
+    }
+  }
+
   private saveSync(): void {
     const temp = `${DATA_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(this.data, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -317,11 +347,30 @@ class Store {
 
   private async mutate<T>(operation: () => T): Promise<T> {
     let result!: T;
-    const run = this.mutationQueue.then(() => {
-      result = operation();
-      this.saveSync();
+    const run = this.mutationQueue.then(async () => {
+      await this.ready;
+      if (!this.mongoAdapter) {
+        result = operation();
+        this.saveSync();
+        return;
+      }
+
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        const latest = await this.mongoAdapter.load();
+        this.data = this.migrate(latest.data);
+        this.mongoRevision = latest.revision;
+        result = operation();
+        try {
+          this.mongoRevision = await this.mongoAdapter.save(clone(this.data), this.mongoRevision);
+          return;
+        } catch (error) {
+          const conflict = error instanceof Error && error.message.includes('changed concurrently');
+          if (!conflict || attempt === 5) throw error;
+          logger.warn('store_write_conflict_retry', { attempt });
+        }
+      }
     });
-    this.mutationQueue = run.catch(error => {
+    this.mutationQueue = run.then(() => undefined).catch(error => {
       logger.error('store_write_failed', { message: error instanceof Error ? error.message : 'unknown' });
     });
     await run;
@@ -329,7 +378,19 @@ class Store {
   }
 
   private async settled(): Promise<void> {
+    await this.ready;
     await this.mutationQueue;
+    if (this.mongoAdapter) {
+      const latest = await this.mongoAdapter.load();
+      this.data = this.migrate(latest.data);
+      this.mongoRevision = latest.revision;
+    }
+  }
+
+  async healthCheck(): Promise<{ persistence: 'json' | 'mongodb' }> {
+    await this.ready;
+    if (this.mongoAdapter) await this.mongoAdapter.ping();
+    return { persistence: this.mongoAdapter ? 'mongodb' : 'json' };
   }
 
   private checkDailyResetInMemory(): boolean {
@@ -421,7 +482,12 @@ class Store {
 
   async getSettings(): Promise<ISettings> {
     await this.settled();
-    if (this.checkDailyResetInMemory()) this.saveSync();
+    if (this.checkDailyResetInMemory()) {
+      return this.mutate(() => {
+        this.checkDailyResetInMemory();
+        return this.data.settings;
+      });
+    }
     return clone(this.data.settings);
   }
 
@@ -483,6 +549,26 @@ class Store {
       this.data.settings.gmailConnected = false;
       this.data.settings.gmailUserEmail = '';
     });
+  }
+
+  async saveOAuthFlow(state: string, verifier: string, expiresAt: number): Promise<void> {
+    await this.mutate(() => {
+      const now = Date.now();
+      for (const [key, flow] of Object.entries(this.data.oauthFlows)) {
+        if (flow.expiresAt <= now) delete this.data.oauthFlows[key];
+      }
+      this.data.oauthFlows[state] = { verifier: this.encrypt(verifier), expiresAt };
+    });
+  }
+
+  async consumeOAuthFlow(state: string): Promise<{ verifier: string; expiresAt: number } | null> {
+    const stored = await this.mutate(() => {
+      const flow = this.data.oauthFlows[state];
+      if (flow) delete this.data.oauthFlows[state];
+      return flow || null;
+    });
+    if (!stored) return null;
+    return { verifier: this.decrypt(stored.verifier) || '', expiresAt: stored.expiresAt };
   }
 
   private isSuppressedInMemory(email: string): boolean {

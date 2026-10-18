@@ -16,6 +16,7 @@ const phase3_1 = __importDefault(require("./routes/phase3"));
 const phase4_1 = __importDefault(require("./routes/phase4"));
 const schedulerService_1 = require("./services/schedulerService");
 const logger_1 = require("./utils/logger");
+const store_1 = require("./models/store");
 exports.app = (0, express_1.default)();
 exports.app.disable('x-powered-by');
 if (config_1.config.nodeEnv === 'production')
@@ -43,12 +44,22 @@ exports.app.use((req, res, next) => {
     }));
     next();
 });
-const health = (_req, res) => res.json({
-    service: 'Arclivo Labs AI Email Automation API',
-    status: 'online',
-    version: '1.1.0',
-    timestamp: new Date().toISOString(),
-});
+const health = async (_req, res) => {
+    try {
+        const persistence = await store_1.store.healthCheck();
+        res.json({
+            service: 'Arclivo Labs AI Email Automation API',
+            status: 'online',
+            version: '1.1.0',
+            persistence: persistence.persistence,
+            timestamp: new Date().toISOString(),
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('health_check_failed', { message: error instanceof Error ? error.message : 'unknown' });
+        res.status(503).json({ status: 'unavailable' });
+    }
+};
 exports.app.get('/', health);
 exports.app.get('/healthz', health);
 exports.app.use('/api', api_1.default);

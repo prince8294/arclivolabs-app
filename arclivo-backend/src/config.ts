@@ -20,6 +20,11 @@ export const config = {
   googleRedirectUri:
     process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback',
   dataDir: process.env.ARCLIVO_DATA_DIR || '',
+  persistenceDriver: process.env.PERSISTENCE_DRIVER || (process.env.NODE_ENV === 'production' ? 'mongodb' : 'json'),
+  mongodbUri: process.env.MONGODB_URI || '',
+  mongodbDbName: process.env.MONGODB_DB_NAME || 'arclivo',
+  mongodbStateCollection: process.env.MONGODB_STATE_COLLECTION || 'app_state',
+  cronSecret: process.env.CRON_SECRET || '',
   requestBodyLimit: process.env.REQUEST_BODY_LIMIT || '2mb',
   sessionTtlSeconds: positiveInteger(process.env.SESSION_TTL_SECONDS, 60 * 60 * 12),
   schedulerPollMs: positiveInteger(process.env.SCHEDULER_POLL_MS, 15_000),
@@ -33,6 +38,9 @@ export function assertSafeStartup(): void {
   if (config.sessionSigningKey.length < 32) missing.push('SESSION_SIGNING_KEY (minimum 32 characters)');
   if (!config.ownerPasswordHash) missing.push('OWNER_PASSWORD_HASH');
   if (!config.dataEncryptionKey) missing.push('DATA_ENCRYPTION_KEY');
+  if (config.persistenceDriver !== 'mongodb') missing.push('PERSISTENCE_DRIVER=mongodb');
+  if (!config.mongodbUri) missing.push('MONGODB_URI');
+  if (config.cronSecret.length < 32) missing.push('CRON_SECRET (minimum 32 characters)');
 
   if (missing.length > 0) {
     throw new Error(`Unsafe production configuration. Missing: ${missing.join(', ')}`);

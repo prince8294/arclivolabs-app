@@ -9,25 +9,20 @@ const config_1 = require("../config");
 const store_1 = require("../models/store");
 const logger_1 = require("../utils/logger");
 class GmailService {
-    static oauthFlows = new Map();
     static testTransport;
     static setTestTransport(transport) {
         if (config_1.config.nodeEnv !== 'test')
             throw new Error('Test transport is only available in NODE_ENV=test.');
         this.testTransport = transport;
     }
-    static createAuthUrl() {
+    static async createAuthUrl() {
         if (!config_1.config.googleClientId || !config_1.config.googleClientSecret) {
             throw new Error('Google OAuth is not configured.');
         }
         const state = crypto_1.default.randomBytes(32).toString('base64url');
         const verifier = crypto_1.default.randomBytes(48).toString('base64url');
         const challenge = crypto_1.default.createHash('sha256').update(verifier).digest('base64url');
-        this.oauthFlows.set(state, { verifier, expiresAt: Date.now() + 10 * 60_000 });
-        for (const [key, flow] of this.oauthFlows) {
-            if (flow.expiresAt <= Date.now())
-                this.oauthFlows.delete(key);
-        }
+        await store_1.store.saveOAuthFlow(state, verifier, Date.now() + 10 * 60_000);
         const scopes = [
             'https://www.googleapis.com/auth/gmail.send',
             'https://www.googleapis.com/auth/userinfo.email',
@@ -47,8 +42,7 @@ class GmailService {
         return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
     }
     static async handleAuthCallback(code, state) {
-        const flow = this.oauthFlows.get(state);
-        this.oauthFlows.delete(state);
+        const flow = await store_1.store.consumeOAuthFlow(state);
         if (!flow || flow.expiresAt <= Date.now())
             return { success: false, error: 'Invalid or expired OAuth state.' };
         try {

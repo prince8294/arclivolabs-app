@@ -9,6 +9,7 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
+const mongoStateAdapter_1 = require("./mongoStateAdapter");
 const SCHEMA_VERSION = 4;
 const DATA_DIR = config_1.config.dataDir ? path_1.default.resolve(config_1.config.dataDir) : path_1.default.resolve(__dirname, '../../data');
 const DATA_FILE = path_1.default.join(DATA_DIR, 'db.json');
@@ -58,6 +59,7 @@ const defaultData = () => ({
     leads: [],
     settings: defaultSettings(),
     oauth: {},
+    oauthFlows: {},
     secrets: {},
     logs: [],
     emailRecords: [],
@@ -90,8 +92,19 @@ function clone(value) {
 class Store {
     data = defaultData();
     mutationQueue = Promise.resolve();
+    mongoAdapter = config_1.config.persistenceDriver === 'mongodb'
+        ? new mongoStateAdapter_1.MongoStateAdapter()
+        : undefined;
+    mongoRevision = 0;
+    ready;
     constructor() {
-        this.init();
+        if (!['json', 'mongodb'].includes(config_1.config.persistenceDriver)) {
+            throw new Error('PERSISTENCE_DRIVER must be either json or mongodb.');
+        }
+        this.ready = this.mongoAdapter ? this.initMongo() : Promise.resolve(this.initJson());
+        void this.ready.catch(error => {
+            logger_1.logger.error('store_initialization_failed', { message: error instanceof Error ? error.message : 'unknown' });
+        });
     }
     encryptionKey() {
         if (!config_1.config.dataEncryptionKey)
@@ -158,6 +171,7 @@ class Store {
                 }))
                 : [],
             oauth: raw?.oauth || {},
+            oauthFlows: raw?.oauthFlows && typeof raw.oauthFlows === 'object' ? raw.oauthFlows : {},
             secrets: raw?.secrets || {},
             logs: Array.isArray(raw?.logs) ? raw.logs : [],
             emailRecords: Array.isArray(raw?.emailRecords) ? raw.emailRecords : [],
@@ -203,7 +217,7 @@ class Store {
         }
         return result;
     }
-    init() {
+    initJson() {
         fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
         let source = DATA_FILE;
         try {
@@ -224,6 +238,15 @@ class Store {
             throw primaryError;
         }
     }
+    async initMongo() {
+        const state = await this.mongoAdapter.initialize(defaultData());
+        const migrated = this.migrate(state.data);
+        this.data = migrated;
+        this.mongoRevision = state.revision;
+        if (JSON.stringify(migrated) !== JSON.stringify(state.data)) {
+            this.mongoRevision = await this.mongoAdapter.save(clone(migrated), this.mongoRevision);
+        }
+    }
     saveSync() {
         const temp = `${DATA_FILE}.${process.pid}.tmp`;
         fs_1.default.writeFileSync(temp, JSON.stringify(this.data, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -236,18 +259,50 @@ class Store {
     }
     async mutate(operation) {
         let result;
-        const run = this.mutationQueue.then(() => {
-            result = operation();
-            this.saveSync();
+        const run = this.mutationQueue.then(async () => {
+            await this.ready;
+            if (!this.mongoAdapter) {
+                result = operation();
+                this.saveSync();
+                return;
+            }
+            for (let attempt = 1; attempt <= 5; attempt += 1) {
+                const latest = await this.mongoAdapter.load();
+                this.data = this.migrate(latest.data);
+                this.mongoRevision = latest.revision;
+                result = operation();
+                try {
+                    this.mongoRevision = await this.mongoAdapter.save(clone(this.data), this.mongoRevision);
+                    return;
+                }
+                catch (error) {
+                    const conflict = error instanceof Error && error.message.includes('changed concurrently');
+                    if (!conflict || attempt === 5)
+                        throw error;
+                    logger_1.logger.warn('store_write_conflict_retry', { attempt });
+                }
+            }
         });
-        this.mutationQueue = run.catch(error => {
+        this.mutationQueue = run.then(() => undefined).catch(error => {
             logger_1.logger.error('store_write_failed', { message: error instanceof Error ? error.message : 'unknown' });
         });
         await run;
         return clone(result);
     }
     async settled() {
+        await this.ready;
         await this.mutationQueue;
+        if (this.mongoAdapter) {
+            const latest = await this.mongoAdapter.load();
+            this.data = this.migrate(latest.data);
+            this.mongoRevision = latest.revision;
+        }
+    }
+    async healthCheck() {
+        await this.ready;
+        if (this.mongoAdapter)
+            await this.mongoAdapter.ping();
+        return { persistence: this.mongoAdapter ? 'mongodb' : 'json' };
     }
     checkDailyResetInMemory() {
         const today = timezoneDate(this.data.settings.businessTimezone || 'Asia/Kolkata');
@@ -330,8 +385,12 @@ class Store {
     }
     async getSettings() {
         await this.settled();
-        if (this.checkDailyResetInMemory())
-            this.saveSync();
+        if (this.checkDailyResetInMemory()) {
+            return this.mutate(() => {
+                this.checkDailyResetInMemory();
+                return this.data.settings;
+            });
+        }
         return clone(this.data.settings);
     }
     async updateSettings(updates) {
@@ -388,6 +447,27 @@ class Store {
             this.data.settings.gmailConnected = false;
             this.data.settings.gmailUserEmail = '';
         });
+    }
+    async saveOAuthFlow(state, verifier, expiresAt) {
+        await this.mutate(() => {
+            const now = Date.now();
+            for (const [key, flow] of Object.entries(this.data.oauthFlows)) {
+                if (flow.expiresAt <= now)
+                    delete this.data.oauthFlows[key];
+            }
+            this.data.oauthFlows[state] = { verifier: this.encrypt(verifier), expiresAt };
+        });
+    }
+    async consumeOAuthFlow(state) {
+        const stored = await this.mutate(() => {
+            const flow = this.data.oauthFlows[state];
+            if (flow)
+                delete this.data.oauthFlows[state];
+            return flow || null;
+        });
+        if (!stored)
+            return null;
+        return { verifier: this.decrypt(stored.verifier) || '', expiresAt: stored.expiresAt };
     }
     isSuppressedInMemory(email) {
         const normalized = email.toLowerCase().trim();

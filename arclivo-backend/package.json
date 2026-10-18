@@ -9,8 +9,10 @@
     "start": "node dist/server.js",
     "dev": "node -r ts-node/register src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test tests/run-tests.js tests/phase4-tests.js tests/phase5-integration-tests.js",
+    "test": "npm run build && node --test tests/run-tests.js tests/phase4-tests.js tests/phase5-integration-tests.js tests/serverless-compat-tests.js",
     "setup:owner-auth": "node scripts/setup-owner-auth.js",
+    "migrate:mongodb": "node scripts/migrate-json-to-mongodb.js",
+    "verify:mongodb": "node scripts/migrate-json-to-mongodb.js --verify",
     "generate:password-hash": "node scripts/hash-password.js",
     "generate:encryption-key": "node scripts/generate-encryption-key.js"
   },
@@ -18,7 +20,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "express-async-errors": "^3.1.1"
+    "express-async-errors": "^3.1.1",
+    "mongodb": "^6.21.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.13",

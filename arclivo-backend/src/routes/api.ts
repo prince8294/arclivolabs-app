@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { config } from '../config';
 import { rateLimit, requireOwner } from '../middleware/security';
@@ -57,6 +58,23 @@ router.get('/auth/google/callback', async (req: Request, res: Response) => {
     return;
   }
   res.send(`<h2>Gmail connected successfully</h2><p>${escape(result.userEmail || '')}</p><p>You can return to the Arclivo app.</p>`);
+});
+
+router.get('/internal/cron/process-email', async (req, res) => {
+  const provided = req.header('authorization') || '';
+  const expected = config.cronSecret ? `Bearer ${config.cronSecret}` : '';
+  const providedBytes = Buffer.from(provided);
+  const expectedBytes = Buffer.from(expected);
+  const authorized =
+    expectedBytes.length > 0 &&
+    providedBytes.length === expectedBytes.length &&
+    crypto.timingSafeEqual(providedBytes, expectedBytes);
+  if (!authorized) {
+    res.status(401).json({ error: 'Unauthorized scheduled invocation.' });
+    return;
+  }
+  await SchedulerService.processQueue();
+  res.json({ success: true });
 });
 
 router.use(requireOwner);
@@ -228,9 +246,9 @@ router.post('/settings/test-gmail', sendLimiter, async (_req, res) => {
   res.json({ ...result, message: result.connected ? `Connected to ${result.userEmail}` : result.error });
 });
 
-router.get('/auth/google/url', sendLimiter, (_req, res) => {
+router.get('/auth/google/url', sendLimiter, async (_req, res) => {
   try {
-    res.json({ url: GmailService.createAuthUrl() });
+    res.json({ url: await GmailService.createAuthUrl() });
   } catch (error) {
     safeError(res, error, 503);
   }

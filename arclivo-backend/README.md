@@ -29,24 +29,30 @@ Production startup fails closed when owner authentication or data encryption is 
 - `SCHEDULER_POLL_MS`: scheduler interval; default 15 seconds.
 - `GMAIL_TIMEOUT_MS`: Google request timeout; default 20 seconds.
 - `ARCLIVO_DATA_DIR`: test/operations override for the data directory. Do not point tests at production data.
+- `PERSISTENCE_DRIVER`: `json` for local/test use, `mongodb` for production and Vercel.
+- `MONGODB_URI`, `MONGODB_DB_NAME`, `MONGODB_STATE_COLLECTION`: MongoDB Atlas configuration.
+- `CRON_SECRET`: 32+ character secret that authenticates Vercel scheduled requests.
 
 ## Authentication and Gmail
 
 The mobile app exchanges the owner password for a short-lived signed session token through `POST /api/auth/session`. The password and permanent server keys are not bundled in the APK. All sensitive endpoints require the bearer session.
 
-Gmail authorization uses the existing scopes, OAuth `state`, and PKCE. Access and refresh tokens are encrypted at rest. Disconnect attempts Google revocation before clearing local credentials.
+Gmail authorization uses the existing scopes, OAuth `state`, and PKCE. OAuth state and its encrypted PKCE verifier are persisted in the configured store so callbacks can land on a different serverless invocation. Access and refresh tokens are encrypted at rest. Disconnect attempts Google revocation before clearing local credentials.
 
 The callback remains a backend URL. Configure the exact public HTTPS callback in Google Cloud. The Android app opens the authorization URL in the system browser and the backend callback shows completion status.
 
-## Persistence and scheduler limitations
+## Persistence and scheduler
 
-The active persistence implementation is JSON. MongoDB is not implemented and no database migration was performed.
+Local development and automated tests use the existing atomic JSON adapter. Production uses MongoDB Atlas and never writes business data to the Vercel filesystem. The MongoDB adapter stores versioned state durably and uses compare-and-swap writes with conflict retries; a failed write is logged and returned to the request instead of being silently ignored.
 
 Writes use a serialized in-process mutation queue, temporary file, file flush, atomic rename, and a one-generation backup. The schema is versioned and older records are migrated additively. Suppressions, delivery history, and audit history survive lead deletion.
 
-This JSON implementation supports exactly one backend process and one writable data volume. Do not run multiple replicas or processes against the same file. A future multi-instance deployment requires a transactional database implementation with unique idempotency indexes.
+The JSON implementation remains limited to one backend process and one writable local volume. Run `npm run migrate:mongodb` for a no-write migration preview, `npm run migrate:mongodb -- --commit` once to insert into an empty target, and `npm run verify:mongodb` to compare record counts. The migration refuses to overwrite existing MongoDB state.
 
 Scheduler behavior:
+
+- Local/VPS mode uses the existing interval scheduler.
+- Vercel invokes the authenticated `/api/internal/cron/process-email` route according to `vercel.json`; no interval is started inside a Function.
 
 - Automatic sending defaults to disabled and the default limit remains five per day.
 - Only permissioned, unsuppressed, explicitly approved drafts can send.
