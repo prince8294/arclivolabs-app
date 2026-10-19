@@ -239,12 +239,24 @@ class Store {
         }
     }
     async initMongo() {
-        const state = await this.mongoAdapter.initialize(defaultData());
-        const migrated = this.migrate(state.data);
-        this.data = migrated;
-        this.mongoRevision = state.revision;
-        if (JSON.stringify(migrated) !== JSON.stringify(state.data)) {
-            this.mongoRevision = await this.mongoAdapter.save(clone(migrated), this.mongoRevision);
+        let state = await this.mongoAdapter.initialize(defaultData());
+        for (let attempt = 1; attempt <= 5; attempt += 1) {
+            const migrated = this.migrate(state.data);
+            this.data = migrated;
+            this.mongoRevision = state.revision;
+            if (JSON.stringify(migrated) === JSON.stringify(state.data))
+                return;
+            try {
+                this.mongoRevision = await this.mongoAdapter.save(clone(migrated), this.mongoRevision);
+                return;
+            }
+            catch (error) {
+                const conflict = error instanceof Error && error.message.includes('changed concurrently');
+                if (!conflict || attempt === 5)
+                    throw error;
+                logger_1.logger.warn('store_initialization_conflict_retry', { attempt });
+                state = await this.mongoAdapter.load();
+            }
         }
     }
     saveSync() {
